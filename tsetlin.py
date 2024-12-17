@@ -5,6 +5,10 @@ import kagglehub
 from GraphTsetlinMachine.graphs import Graphs
 from GraphTsetlinMachine.tm import MultiClassGraphTsetlinMachine
 
+import kagglehub
+import shutil
+import os
+
 def download_dataset():
     """
     Download the Hex dataset using KaggleHub.
@@ -12,10 +16,22 @@ def download_dataset():
         str: Path to the downloaded CSV file.
     """
     print("Downloading dataset...")
-    path = kagglehub.dataset_download("cholling/game-of-hex", target_dir="data/")
-    csv_path = os.path.join(path, "hex_games_1_000_000_size_7.csv")
-    print("Dataset downloaded to:", csv_path)
-    return csv_path
+    # Download dataset to the default location
+    path = kagglehub.dataset_download("cholling/game-of-hex")
+    
+    # The default path where the dataset is downloaded
+    csv_source_path = os.path.join(path, "hex_games_1_000_000_size_7.csv")
+    target_dir = "data/"
+    
+    # Ensure the target directory exists
+    os.makedirs(target_dir, exist_ok=True)
+    
+    # Move the file to the target directory
+    csv_target_path = os.path.join(target_dir, "hex_games_1_000_000_size_7.csv")
+    shutil.move(csv_source_path, csv_target_path)
+    
+    print("Dataset downloaded and moved to:", csv_target_path)
+    return csv_target_path
 
 def load_hex_dataset(csv_path):
     """
