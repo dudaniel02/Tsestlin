@@ -1,31 +1,43 @@
 import numpy as np
-import random
+import pandas as pd
 import os
-from graphtsetlinmachine import Graphs, MultiClassGraphTsetlinMachine
+import kagglehub
+from GraphTsetlinMachine.graphs import Graphs
+from GraphTsetlinMachine.tm import MultiClassGraphTsetlinMachine
 
-# =========================================
-# Placeholder function for loading your dataset.
-# Adjust this to match your data loading mechanism.
-# Should return:
-# boards: shape (N, 121) with values in {1, -1, 0}
-# winners: shape (N,) with values in {1, -1}
-def load_dataset():
-    # Replace this dummy code with actual data loading
-    # For demonstration, we create a random dataset.
-    # In practice, load your 11x11 Hex states and winners.
-    N = 500  # Suppose we have 500 samples total (just an example)
-    boards = np.random.choice([1, -1, 0], size=(N, 121), p=[0.4, 0.4, 0.2])
-    # Random winners
-    winners = np.random.choice([1, -1], size=(N,))
+def download_dataset():
+    """
+    Download the Hex dataset using KaggleHub.
+    Returns:
+        str: Path to the downloaded CSV file.
+    """
+    print("Downloading dataset...")
+    path = kagglehub.dataset_download("cholling/game-of-hex", target_dir="data/")
+    csv_path = os.path.join(path, "hex_games_1_000_000_size_7.csv")
+    print("Dataset downloaded to:", csv_path)
+    return csv_path
+
+def load_hex_dataset(csv_path):
+    """
+    Load Hex board states and winner outcomes from a CSV file.
+    Args:
+        csv_path (str): Path to the dataset CSV file.
+    Returns:
+        boards (np.array): Shape (N, 49) for 7x7 boards flattened.
+        winners (np.array): Shape (N,) with values {1, -1}.
+    """
+    df = pd.read_csv(csv_path)
+    board_columns = [col for col in df.columns if col.startswith('cell')]
+    boards = df[board_columns].values  # Shape: (N, 49) for 7x7 board
+    winners = df['winner'].values
     return boards, winners
 
-# =========================================
-# Convert winner from {1, -1} to {1,0}
 def convert_label(winner):
+    # Convert from {1, -1} to {1, 0}
     return 1 if winner == 1 else 0
 
-# Hex adjacency function
-def hex_neighbors(r, c, board_size=11):
+def hex_neighbors(r, c, board_size=7):
+    # Adjacency in a hex grid for a 7x7 board
     candidates = [
        (r-1, c), (r+1, c),
        (r, c-1), (r, c+1),
@@ -33,19 +45,22 @@ def hex_neighbors(r, c, board_size=11):
     ]
     return [(rr, cc) for (rr, cc) in candidates if 0 <= rr < board_size and 0 <= cc < board_size]
 
-# =========================================
-# Main code
 if __name__ == "__main__":
-    # Load your dataset
-    boards, winners = load_dataset()
-    N_total = boards.shape[0]
+    # Download and load dataset
+    csv_path = download_dataset()
+    boards, winners = load_hex_dataset(csv_path)
 
-    # Train on a smaller portion for testing locally
-    N_train = 100  # You can increase this as needed
+    print("Loaded dataset:")
+    print("Boards shape:", boards.shape)   # Expecting (N, 49)
+    print("Winners shape:", winners.shape) # Expecting (N,)
+
+    # Use a smaller subset for local training
+    N_total = boards.shape[0]
+    N_train = min(100, N_total)  # Use 100 or fewer if dataset is smaller
     boards = boards[:N_train]
     winners = winners[:N_train]
 
-    board_size = 11
+    board_size = 7
     num_nodes = board_size * board_size
 
     # Symbols for node properties
@@ -53,7 +68,6 @@ if __name__ == "__main__":
     hypervector_size = 128
     hypervector_bits = 2
 
-    # Initialize Graphs
     graphs = Graphs(
         N_train,
         symbols=symbols,
@@ -66,16 +80,15 @@ if __name__ == "__main__":
         graphs.set_number_of_graph_nodes(graph_id, num_nodes)
     graphs.prepare_node_configuration()
 
-    # Add nodes for each graph
+    # Add nodes
     for graph_id in range(N_train):
         for r in range(board_size):
             for c in range(board_size):
                 node_name = f"Cell_{r}_{c}"
-                # We'll set edges later, so initially zero outgoing
                 graphs.add_graph_node(graph_id, node_name, 0)
     graphs.prepare_edge_configuration()
 
-    # Add edges
+    # Add edges based on hex adjacency
     edge_type = "Adj"
     for graph_id in range(N_train):
         for r in range(board_size):
@@ -104,49 +117,21 @@ if __name__ == "__main__":
                 symbol = 'Empty'
             graphs.add_graph_node_property(graph_id, node_name, symbol)
 
-    # Set up a training/test split within our small dataset (e.g., 80/20)
-    split = int(N_train * 0.8)
-    train_idx = np.arange(split)
-    test_idx = np.arange(split, N_train)
-
-    # Extract train/test
-    # The GraphTsetlinMachine uses entire graphs as input. We can slice directly.
-    # However, slicing 'graphs' directly isn't supported as a typical numpy array.
-    # We handle training and testing by referencing indices and passing them to fit/evaluate.
-    # Some versions of the API support subsampling via arguments. If not, we might need two Graphs objects.
-    # For simplicity, let's just train on all, then evaluate on a subset. In practice, create two Graphs objects.
-    
-    # For demonstration, let's just train on the whole small set and evaluate on the same.
-    # In a real scenario, you'd create a separate Graphs object for the test set or implement indexing.
-
-    # Initialize MultiClass Graph Tsetlin Machine
-    # For a binary classification: number_of_classes=2
+    # For demonstration, just train and evaluate on the same small dataset
     tm = MultiClassGraphTsetlinMachine(
         number_of_classes=2,
         T=500,
         s=10.0,
         number_of_clauses=200,
         number_of_state_bits=8,
-        max_steps=2,   # message passing rounds
-        # If you want CPU-only training, set these:
-        # set 'cuda=False' if needed, or ensure no CUDA device is visible.
-        # By default, it tries GPU if available.
-        cuda=(os.environ.get("CUDA_VISIBLE_DEVICES") is not None)  # heuristic
+        max_steps=2,
+        cuda=(os.environ.get("CUDA_VISIBLE_DEVICES") is not None)  # use GPU if available
     )
 
-    # Train
     print("Starting training...")
-    tm.fit(graphs, Y, epochs=5, incremental=False)  # A few epochs for demonstration
+    tm.fit(graphs, Y, epochs=5, incremental=False)
     print("Training completed.")
 
-    # Evaluate on training set itself (just to show evaluation mechanics)
     predictions = tm.predict(graphs)
     accuracy = (predictions == Y).mean()
-    print("Training Accuracy:", accuracy)
-
-    # In practice, you would:
-    # 1) Create a separate test set (graphs_test, Y_test)
-    # 2) Evaluate: test_predictions = tm.predict(graphs_test)
-    # 3) Compute test accuracy.
-
-    # Done.
+    print("Accuracy on training set (small subset):", accuracy)
