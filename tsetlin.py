@@ -3,14 +3,15 @@ import pandas as pd
 from tqdm import tqdm
 from GraphTsetlinMachine.graphs import Graphs
 from GraphTsetlinMachine.tm import MultiClassGraphTsetlinMachine
+import os
 
 board_size = 11
 num_cells = board_size * board_size
 
 # Reduced parameters for faster testing
 number_of_clauses = 1
-T = 5
-s = 5.0
+T = 10
+s = 1.0
 number_of_state_bits = 8
 epochs = 1 # fewer epochs to test speed
 
@@ -95,7 +96,7 @@ def build_graphs(boards, symbols=['P1','P2','Empty']):
 
 def train_and_evaluate(boards, winners, scenario_name):
     N = boards.shape[0]
-    N = min(N, 10)  # reduce to 800 total for speed
+    N = min(N, 10)  # reduce to 100 total for speed
     boards = boards[:N]
     winners = winners[:N]
 
@@ -118,17 +119,27 @@ def train_and_evaluate(boards, winners, scenario_name):
         s=s,
         number_of_state_bits=number_of_state_bits
     )
+    print("Number of graphs:", graphs_train.number_of_graphs)
+    print("Number of nodes in first graph:", graphs_train.number_of_graph_nodes[0])
 
     print(f"\nTraining on scenario: {scenario_name}")
     for epoch in tqdm(range(epochs), desc="Training Epochs"):
+        print(f"Starting epoch {epoch+1}/{epochs}...")
+
+        # Training for 1 epoch at a time
+        print("About to start training...")
         tm.fit(graphs_train, Y_train, epochs=1, incremental=True)
+        print("Training step completed.")
+
+        # Evaluate on training set
         train_pred = tm.predict(graphs_train)
         train_acc = (train_pred == Y_train).mean()
-        tqdm.write(f"Epoch {epoch+1}/{epochs} - Train Accuracy: {train_acc:.2f}")
+        tqdm.write(f"Epoch {epoch+1}/{epochs} - Train Accuracy: {train_acc:.4f}")
 
+    # Final evaluation on test set
     test_pred = tm.predict(graphs_test)
     test_acc = (test_pred == Y_test).mean()
-    print(f"Test Accuracy on scenario '{scenario_name}': {test_acc:.2f}")
+    print(f"Test Accuracy on scenario '{scenario_name}': {test_acc:.4f}")
 
 if __name__ == "__main__":
     csv_path = "hex_games.csv"
