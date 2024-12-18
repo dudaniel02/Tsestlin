@@ -8,19 +8,22 @@ import os
 board_size = 11
 num_cells = board_size * board_size
 
-# Reduced parameters for faster testing
-number_of_clauses = 1
-T = 10
-s = 1.0
+# Moderate parameters
+number_of_clauses = 10
+T = 50
+s = 5.0
 number_of_state_bits = 8
-epochs = 1 # fewer epochs to test speed
+epochs = 5
 
 def load_hex_dataset(csv_path):
     df = pd.read_csv(csv_path)
     board_columns = [f"cell_{i}" for i in range(num_cells)]
     boards = df[board_columns].values
     winners = df['winner'].values
-    return boards, winners
+
+    # Convert winners from {1, -1} to {0, 1}
+    winners_converted = np.where(winners == 1, 0, 1)
+    return boards, winners_converted
 
 def create_partial_states(boards, n_moves):
     partial = boards.copy()
@@ -88,7 +91,6 @@ def build_graphs(boards, symbols=['P1','P2','Empty']):
                 symbol = 'Empty'
             graphs.add_graph_node_property(g_id, node_name, symbol)
 
-    # Encode
     tqdm.write("Encoding graphs...")
     graphs.encode()
 
@@ -96,9 +98,19 @@ def build_graphs(boards, symbols=['P1','P2','Empty']):
 
 def train_and_evaluate(boards, winners, scenario_name):
     N = boards.shape[0]
-    N = min(N, 10)  # reduce to 100 total for speed
+    N = min(N, 100)  # Use 100 samples if possible
     boards = boards[:N]
     winners = winners[:N]
+
+    # Check class distribution before splitting
+    unique_classes, counts = np.unique(winners, return_counts=True)
+    print(f"{scenario_name} class distribution before split:", unique_classes, counts)
+
+    # If all samples are from the same class, shuffle and hope to get variation or just warn the user
+    if len(unique_classes) == 1:
+        print(f"Warning: Only one class present for scenario '{scenario_name}'. Classification won't make sense.")
+        # You could try a different indexing or skipping scenario here.
+        # For now, just proceed but note that results won't be meaningful.
 
     split = int(0.8 * N)
     boards_train = boards[:split]
@@ -113,23 +125,24 @@ def train_and_evaluate(boards, winners, scenario_name):
     Y_train = winners_train.astype(np.uint32)
     Y_test = winners_test.astype(np.uint32)
 
+    # Check again after split
+    print("Train Y unique:", np.unique(Y_train, return_counts=True))
+    print("Test Y unique:", np.unique(Y_test, return_counts=True))
+
     tm = MultiClassGraphTsetlinMachine(
         number_of_clauses=number_of_clauses,
         T=T,
         s=s,
         number_of_state_bits=number_of_state_bits
     )
+
     print("Number of graphs:", graphs_train.number_of_graphs)
     print("Number of nodes in first graph:", graphs_train.number_of_graph_nodes[0])
 
     print(f"\nTraining on scenario: {scenario_name}")
     for epoch in tqdm(range(epochs), desc="Training Epochs"):
         print(f"Starting epoch {epoch+1}/{epochs}...")
-
-        # Training for 1 epoch at a time
-        print("About to start training...")
         tm.fit(graphs_train, Y_train, epochs=1, incremental=True)
-        print("Training step completed.")
 
         # Evaluate on training set
         train_pred = tm.predict(graphs_train)
