@@ -5,17 +5,21 @@ from GraphTsetlinMachine.graphs import Graphs
 from GraphTsetlinMachine.tm import MultiClassGraphTsetlinMachine
 import os
 
+# Configuration
 board_size = 11
 num_cells = board_size * board_size
 
-# Moderate parameters
-number_of_clauses = 10
-T = 50
-s = 5.0
+# Tsetlin Machine parameters
+number_of_clauses = 20000
+T = 25000
+s = 10.0
 number_of_state_bits = 8
 epochs = 5
 
 def load_hex_dataset(csv_path):
+    """
+    Load dataset from CSV and return board states and winners.
+    """
     df = pd.read_csv(csv_path)
     board_columns = [f"cell_{i}" for i in range(num_cells)]
     boards = df[board_columns].values
@@ -26,6 +30,9 @@ def load_hex_dataset(csv_path):
     return boards, winners_converted
 
 def create_partial_states(boards, n_moves):
+    """
+    Create partial board states by removing the last `n_moves` stones.
+    """
     partial = boards.copy()
     for i in tqdm(range(partial.shape[0]), desc=f"Creating partial states (removing {n_moves} moves)"):
         row = partial[i]
@@ -36,6 +43,9 @@ def create_partial_states(boards, n_moves):
     return partial
 
 def hex_neighbors(r, c, board_size=11):
+    """
+    Return valid neighbors for a given cell in a hex grid.
+    """
     candidates = [
         (r-1, c), (r+1, c),
         (r, c-1), (r, c+1),
@@ -43,46 +53,37 @@ def hex_neighbors(r, c, board_size=11):
     ]
     return [(rr, cc) for (rr, cc) in candidates if 0 <= rr < board_size and 0 <= cc < board_size]
 
-def build_graphs(boards, symbols=['P1','P2','Empty']):
+def encode_board_graphs(boards):
+    """
+    Encode boards as graphs for the Graph Tsetlin Machine.
+    """
     N = boards.shape[0]
+    symbols = ['P1', 'P2', 'Empty']
     graphs = Graphs(
         N,
         symbols=symbols,
-        hypervector_size=64,
+        hypervector_size=1024,
         hypervector_bits=2
     )
 
-    # Set number of nodes per graph
+    # Set number of nodes
     for g_id in tqdm(range(N), desc="Setting graph nodes count"):
         graphs.set_number_of_graph_nodes(g_id, num_cells)
     graphs.prepare_node_configuration()
 
-    # Add nodes
-    for g_id in tqdm(range(N), desc="Adding nodes"):
-        for r in range(board_size):
-            for c in range(board_size):
-                neighs = hex_neighbors(r, c, board_size=board_size)
-                graphs.add_graph_node(g_id, f"Cell_{r}_{c}", len(neighs))
-
-    graphs.prepare_edge_configuration()
-
-    # Add edges
-    for g_id in tqdm(range(N), desc="Adding edges"):
-        for r in range(board_size):
-            for c in range(board_size):
-                node_name = f"Cell_{r}_{c}"
-                neighs = hex_neighbors(r, c, board_size=board_size)
-                for (rr, cc) in neighs:
-                    neighbor_name = f"Cell_{rr}_{cc}"
-                    graphs.add_graph_node_edge(g_id, node_name, neighbor_name, "Adj")
-
-    # Add properties
-    for g_id in tqdm(range(N), desc="Adding node properties"):
+    # Add nodes with properties
+    for g_id in tqdm(range(N), desc="Adding nodes and properties"):
         board = boards[g_id]
         for idx, val in enumerate(board):
             r = idx // board_size
             c = idx % board_size
             node_name = f"Cell_{r}_{c}"
+
+            # Add node with neighbor count
+            neighbors_count = len(hex_neighbors(r, c, board_size))
+            graphs.add_graph_node(g_id, node_name, neighbors_count)
+
+            # Assign properties
             if val == 1:
                 symbol = 'P1'
             elif val == -1:
@@ -91,44 +92,48 @@ def build_graphs(boards, symbols=['P1','P2','Empty']):
                 symbol = 'Empty'
             graphs.add_graph_node_property(g_id, node_name, symbol)
 
+    graphs.prepare_edge_configuration()
+
+    # Add edges
+    for g_id in tqdm(range(N), desc="Adding edges"):
+        for r in range(board_size):
+            for c in range(board_size):
+                node_name = f"Cell_{r}_{c}"
+                for (rr, cc) in hex_neighbors(r, c, board_size):
+                    neighbor_name = f"Cell_{rr}_{cc}"
+                    graphs.add_graph_node_edge(g_id, node_name, neighbor_name, "Adj")
+
     tqdm.write("Encoding graphs...")
     graphs.encode()
-
     return graphs
 
 def train_and_evaluate(boards, winners, scenario_name):
+    """
+    Train and evaluate the Tsetlin Machine for a given scenario.
+    """
+
     N = boards.shape[0]
-    N = min(N, 100)  # Use 100 samples if possible
+    N = min(N, 10000)
     boards = boards[:N]
     winners = winners[:N]
 
-    # Check class distribution before splitting
-    unique_classes, counts = np.unique(winners, return_counts=True)
-    print(f"{scenario_name} class distribution before split:", unique_classes, counts)
-
-    # If all samples are from the same class, shuffle and hope to get variation or just warn the user
-    if len(unique_classes) == 1:
-        print(f"Warning: Only one class present for scenario '{scenario_name}'. Classification won't make sense.")
-        # You could try a different indexing or skipping scenario here.
-        # For now, just proceed but note that results won't be meaningful.
-
-    split = int(0.8 * N)
+    # Split dataset into train/test
+    split = int(0.5 * N)
     boards_train = boards[:split]
     winners_train = winners[:split]
     boards_test = boards[split:]
     winners_test = winners[split:]
 
+    # Encode graphs
     print(f"\nBuilding graphs for scenario: {scenario_name}")
-    graphs_train = build_graphs(boards_train)
-    graphs_test = build_graphs(boards_test)
+    graphs_train = encode_board_graphs(boards_train)
+    graphs_test = encode_board_graphs(boards_test)
 
+    # Convert labels
     Y_train = winners_train.astype(np.uint32)
     Y_test = winners_test.astype(np.uint32)
 
-    # Check again after split
-    print("Train Y unique:", np.unique(Y_train, return_counts=True))
-    print("Test Y unique:", np.unique(Y_test, return_counts=True))
-
+    # Initialize Tsetlin Machine
     tm = MultiClassGraphTsetlinMachine(
         number_of_clauses=number_of_clauses,
         T=T,
@@ -136,12 +141,8 @@ def train_and_evaluate(boards, winners, scenario_name):
         number_of_state_bits=number_of_state_bits
     )
 
-    print("Number of graphs:", graphs_train.number_of_graphs)
-    print("Number of nodes in first graph:", graphs_train.number_of_graph_nodes[0])
-
     print(f"\nTraining on scenario: {scenario_name}")
     for epoch in tqdm(range(epochs), desc="Training Epochs"):
-        print(f"Starting epoch {epoch+1}/{epochs}...")
         tm.fit(graphs_train, Y_train, epochs=1, incremental=True)
 
         # Evaluate on training set
@@ -158,10 +159,12 @@ if __name__ == "__main__":
     csv_path = "hex_games.csv"
     boards, winners = load_hex_dataset(csv_path)
 
+    # Generate scenarios
     final_boards = boards.copy()
     boards_2_before = create_partial_states(boards, 2)
     boards_5_before = create_partial_states(boards, 5)
 
+    # Train and evaluate on each scenario
     train_and_evaluate(final_boards, winners, "final")
     train_and_evaluate(boards_2_before, winners, "2_moves_before")
     train_and_evaluate(boards_5_before, winners, "5_moves_before")
